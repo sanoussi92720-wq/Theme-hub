@@ -1,0 +1,401 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default-Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Core Helpers
+    // -------------------------------------------------------------------------
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string &&
+             id.size() >= 1 &&
+             id.size() <= 128 &&
+             id.matches('^[a-zA-Z0-9_.\\-]+$') &&
+             !id.matches('^\\.\\.?$');
+    }
+
+    function hasEmail() {
+      return isSignedIn() &&
+             'email' in request.auth.token &&
+             request.auth.token.email is string;
+    }
+
+    function isEmailVerified() {
+      return hasEmail() &&
+             request.auth.token.email_verified == true;
+    }
+
+    // Admin authority verified strictly from server-side users/{uid}.role == 'admin'
+    function isAdmin() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+
+    // Publisher admin access: either users/{uid}.role == 'admin' OR listed in admins/{email}
+    function isApprovedAdmin() {
+      return isAdmin() || (
+        isEmailVerified() && (
+          exists(/databases/$(database)/documents/admins/$(request.auth.token.email.lower())) ||
+          exists(/databases/$(database)/documents/admins/$(request.auth.token.email))
+        )
+      );
+    }
+
+    function isBlocked() {
+      return isSignedIn() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)).data.blocked == true;
+    }
+
+    // -------------------------------------------------------------------------
+    // Entity Validation Blueprints
+    // -------------------------------------------------------------------------
+    function isValidUserFields(data, uid) {
+      return data.keys().hasAll(['uid', 'displayName', 'photoURL', 'bio', 'createdAt', 'role', 'blocked']) &&
+             data.keys().hasOnly(['uid', 'displayName', 'photoURL', 'bio', 'createdAt', 'role', 'blocked']) &&
+             data.uid is string && data.uid == uid &&
+             data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 60 &&
+             data.photoURL is string && data.photoURL.size() <= 500 &&
+             data.bio is string && data.bio.size() <= 150 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.role in ['user', 'admin'] &&
+             data.blocked is bool;
+    }
+
+    function isValidThemeStats(data) {
+      return data.keys().hasAll(['ratingSum', 'ratingCount', 'ratingAvg', 'updatedAt']) &&
+             data.keys().hasOnly(['ratingSum', 'ratingCount', 'ratingAvg', 'updatedAt']) &&
+             data.ratingCount is int && data.ratingCount >= 0 &&
+             (data.ratingSum is int || data.ratingSum is float) &&
+             data.ratingSum >= 0 &&
+             data.ratingSum <= data.ratingCount * 5 &&
+             (data.ratingAvg is int || data.ratingAvg is float) &&
+             data.ratingAvg >= 0 && data.ratingAvg <= 5 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidRating(data) {
+      return data.keys().hasAll(['stars', 'updatedAt']) &&
+             data.keys().hasOnly(['stars', 'updatedAt']) &&
+             data.stars is int && data.stars >= 1 && data.stars <= 5 &&
+             data.updatedAt is timestamp && data.updatedAt <= request.time;
+    }
+
+    function isValidComment(data) {
+      return data.keys().hasAll(['uid', 'name', 'photo', 'text', 'createdAt', 'likes']) &&
+             data.keys().hasOnly(['uid', 'name', 'photo', 'text', 'createdAt', 'likes']) &&
+             data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+             data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+             data.photo is string && data.photo.size() <= 500 &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 500 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.likes is int && data.likes >= 0;
+    }
+
+    function isValidConversation(data, uid) {
+      return data.keys().hasAll(['uid', 'userName', 'userPhoto', 'lastMessage', 'lastMessageAt', 'lastSenderId', 'unreadByAdmin', 'unreadByUser']) &&
+             data.keys().hasOnly(['uid', 'userName', 'userPhoto', 'lastMessage', 'lastMessageAt', 'lastUserMessageAt', 'lastSenderId', 'unreadByAdmin', 'unreadByUser']) &&
+             data.uid is string && data.uid == uid &&
+             data.userName is string && data.userName.size() >= 1 && data.userName.size() <= 60 &&
+             data.userPhoto is string && data.userPhoto.size() <= 500 &&
+             data.lastMessage is string && data.lastMessage.size() <= 1000 &&
+             data.lastMessageAt is timestamp && data.lastMessageAt <= request.time &&
+             (!('lastUserMessageAt' in data) || data.lastUserMessageAt == null || (data.lastUserMessageAt is timestamp && data.lastUserMessageAt <= request.time)) &&
+             data.lastSenderId is string && data.lastSenderId.size() >= 1 && data.lastSenderId.size() <= 128 &&
+             data.unreadByAdmin is int && data.unreadByAdmin >= 0 &&
+             data.unreadByUser is int && data.unreadByUser >= 0;
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['text', 'senderId', 'createdAt', 'read']) &&
+             data.keys().hasOnly(['text', 'senderId', 'createdAt', 'read']) &&
+             data.text is string && data.text.size() >= 1 && data.text.size() <= 1000 &&
+             data.senderId is string && data.senderId.size() >= 1 && data.senderId.size() <= 128 &&
+             data.createdAt is timestamp && data.createdAt <= request.time &&
+             data.read is bool;
+    }
+
+    function isValidReport(data) {
+      return data.keys().hasAll(['targetType', 'targetId', 'reporterUid', 'reportedUid', 'reason', 'createdAt']) &&
+             data.keys().hasOnly(['targetType', 'targetId', 'themeId', 'conversationUid', 'reporterUid', 'reportedUid', 'reason', 'textSnippet', 'createdAt']) &&
+             data.targetType in ['comment', 'message'] &&
+             data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128 &&
+             (!('themeId' in data) || (data.themeId is string && data.themeId.size() <= 128)) &&
+             (!('conversationUid' in data) || (data.conversationUid is string && data.conversationUid.size() <= 128)) &&
+             data.reporterUid is string && data.reporterUid.size() >= 1 && data.reporterUid.size() <= 128 &&
+             data.reportedUid is string && data.reportedUid.size() >= 1 && data.reportedUid.size() <= 128 &&
+             data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 300 &&
+             (!('textSnippet' in data) || (data.textSnippet is string && data.textSnippet.size() <= 300)) &&
+             data.createdAt is timestamp && data.createdAt <= request.time;
+    }
+
+    // -------------------------------------------------------------------------
+    // 1. User Profiles: users/{uid}
+    // -------------------------------------------------------------------------
+    match /users/{uid} {
+      allow get: if isValidId(uid);
+      allow list: if isAdmin() || resource.data.role == 'admin';
+
+      // Users can ONLY create their own profile with role == 'user' and blocked == false
+      allow create: if isSignedIn() &&
+                       isValidId(uid) &&
+                       request.auth.uid == uid &&
+                       isValidUserFields(incoming(), uid) &&
+                       incoming().role == 'user' &&
+                       incoming().blocked == false;
+
+      // Owner can edit displayName, photoURL, bio (unless blocked); Admin can toggle blocked
+      allow update: if isSignedIn() &&
+                       isValidId(uid) &&
+                       isValidUserFields(incoming(), uid) &&
+                       incoming().uid == existing().uid &&
+                       incoming().createdAt == existing().createdAt &&
+                       incoming().role == existing().role && (
+                         (request.auth.uid == uid &&
+                          !isBlocked() &&
+                          incoming().blocked == existing().blocked &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL', 'bio'])) ||
+                         (isAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly(['blocked', 'displayName', 'photoURL', 'bio']))
+                       );
+
+      allow delete: if false;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. Themes Aggregate Stats, Ratings & Comments: themes/{themeId}
+    // -------------------------------------------------------------------------
+    match /themes/{themeId} {
+      allow get: if isValidId(themeId);
+      allow list: if true;
+
+      allow create: if isSignedIn() &&
+                       isValidId(themeId) &&
+                       !isBlocked() &&
+                       isValidThemeStats(incoming()) &&
+                       existsAfter(/databases/$(database)/documents/themes/$(themeId)/ratings/$(request.auth.uid));
+
+      allow update: if isSignedIn() &&
+                       isValidId(themeId) &&
+                       !isBlocked() &&
+                       isValidThemeStats(incoming()) &&
+                       existsAfter(/databases/$(database)/documents/themes/$(themeId)/ratings/$(request.auth.uid)) &&
+                       incoming().ratingCount >= existing().ratingCount &&
+                       incoming().ratingCount <= existing().ratingCount + 1 &&
+                       incoming().ratingSum >= existing().ratingSum - 5 &&
+                       incoming().ratingSum <= existing().ratingSum + 5;
+
+      allow delete: if isAdmin() && isValidId(themeId);
+
+      // User star rating: themes/{themeId}/ratings/{uid}
+      match /ratings/{uid} {
+        allow get: if isValidId(themeId) && isValidId(uid);
+        allow list: if isValidId(themeId);
+
+        allow create, update: if isSignedIn() &&
+                                 isValidId(themeId) &&
+                                 isValidId(uid) &&
+                                 request.auth.uid == uid &&
+                                 !isBlocked() &&
+                                 isValidRating(incoming());
+
+        allow delete: if isSignedIn() &&
+                         isValidId(themeId) &&
+                         isValidId(uid) &&
+                         (request.auth.uid == uid || isAdmin());
+      }
+
+      // Comments: themes/{themeId}/comments/{commentId}
+      match /comments/{commentId} {
+        allow get: if isValidId(themeId) && isValidId(commentId);
+        allow list: if isValidId(themeId);
+
+        allow create: if isSignedIn() &&
+                         isValidId(themeId) &&
+                         isValidId(commentId) &&
+                         !isBlocked() &&
+                         incoming().uid == request.auth.uid &&
+                         incoming().likes == 0 &&
+                         isValidComment(incoming());
+
+        allow update: if isSignedIn() &&
+                         isValidId(themeId) &&
+                         isValidId(commentId) &&
+                         !isBlocked() &&
+                         isValidComment(incoming()) &&
+                         incoming().uid == existing().uid &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['likes']) &&
+                         (incoming().likes == existing().likes + 1 || incoming().likes == existing().likes - 1) &&
+                         incoming().likes >= 0;
+
+        allow delete: if isSignedIn() &&
+                         isValidId(themeId) &&
+                         isValidId(commentId) &&
+                         (existing().uid == request.auth.uid || isAdmin());
+
+        // Comment Likes: themes/{themeId}/comments/{commentId}/likes/{uid}
+        match /likes/{uid} {
+          allow get: if isValidId(themeId) && isValidId(commentId) && isValidId(uid);
+          allow list: if isValidId(themeId) && isValidId(commentId);
+
+          allow create: if isSignedIn() &&
+                           isValidId(themeId) &&
+                           isValidId(commentId) &&
+                           isValidId(uid) &&
+                           request.auth.uid == uid &&
+                           !isBlocked() &&
+                           incoming().keys().hasAll(['uid', 'createdAt']) &&
+                           incoming().keys().hasOnly(['uid', 'createdAt']) &&
+                           incoming().uid == request.auth.uid &&
+                           incoming().createdAt is timestamp &&
+                           incoming().createdAt <= request.time;
+
+          allow update: if false;
+
+          allow delete: if isSignedIn() &&
+                           isValidId(themeId) &&
+                           isValidId(commentId) &&
+                           isValidId(uid) &&
+                           (request.auth.uid == uid || isAdmin());
+        }
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 3. Private Messaging (User <-> Admin Only): conversations/{uid}
+    // -------------------------------------------------------------------------
+    match /conversations/{uid} {
+      allow get: if isSignedIn() &&
+                    isValidId(uid) &&
+                    (request.auth.uid == uid || isAdmin());
+
+      allow list: if isSignedIn() &&
+                     (isAdmin() || resource.data.uid == request.auth.uid);
+
+      allow create: if isSignedIn() &&
+                       isValidId(uid) &&
+                       (request.auth.uid == uid || isAdmin()) &&
+                       (isAdmin() || !isBlocked()) &&
+                       isValidConversation(incoming(), uid);
+
+      allow update: if isSignedIn() &&
+                       isValidId(uid) &&
+                       isValidConversation(incoming(), uid) &&
+                       incoming().uid == existing().uid && (
+                         (isAdmin() &&
+                          incoming().diff(existing()).affectedKeys().hasOnly([
+                            'userName', 'userPhoto', 'lastMessage', 'lastMessageAt',
+                            'lastSenderId', 'unreadByAdmin', 'unreadByUser'
+                          ])) ||
+                         (request.auth.uid == uid && !isBlocked() && (
+                           (incoming().diff(existing()).affectedKeys().hasOnly(['unreadByUser']) &&
+                            incoming().unreadByUser == 0) ||
+                           (incoming().diff(existing()).affectedKeys().hasOnly([
+                              'userName', 'userPhoto', 'lastMessage', 'lastMessageAt',
+                              'lastUserMessageAt', 'lastSenderId', 'unreadByAdmin', 'unreadByUser'
+                            ]) &&
+                            incoming().lastSenderId == request.auth.uid &&
+                            'lastUserMessageAt' in incoming() &&
+                            incoming().lastUserMessageAt is timestamp &&
+                            (!('lastUserMessageAt' in existing()) ||
+                             existing().lastUserMessageAt == null ||
+                             request.time >= existing().lastUserMessageAt + duration.value(2, 's')))
+                         ))
+                       );
+
+      allow delete: if isAdmin() && isValidId(uid);
+
+      match /messages/{messageId} {
+        allow get: if isSignedIn() &&
+                      isValidId(uid) &&
+                      isValidId(messageId) &&
+                      (request.auth.uid == uid || isAdmin());
+
+        allow list: if isSignedIn() &&
+                       isValidId(uid) &&
+                       (request.auth.uid == uid || isAdmin());
+
+        // Atomic conversation update + 2-second rate limit enforced server-side for regular users
+        allow create: if isSignedIn() &&
+                         isValidId(uid) &&
+                         isValidId(messageId) &&
+                         (request.auth.uid == uid || isAdmin()) &&
+                         incoming().senderId == request.auth.uid &&
+                         incoming().read == false &&
+                         isValidMessage(incoming()) && (
+                           isAdmin() || (
+                             !isBlocked() &&
+                             getAfter(/databases/$(database)/documents/conversations/$(uid)).data.lastUserMessageAt is timestamp &&
+                             (!exists(/databases/$(database)/documents/conversations/$(uid)) ||
+                              !('lastUserMessageAt' in get(/databases/$(database)/documents/conversations/$(uid)).data) ||
+                              get(/databases/$(database)/documents/conversations/$(uid)).data.lastUserMessageAt == null ||
+                              request.time >= get(/databases/$(database)/documents/conversations/$(uid)).data.lastUserMessageAt + duration.value(2, 's'))
+                           )
+                         );
+
+        // Recipient can mark message as read
+        allow update: if isSignedIn() &&
+                         isValidId(uid) &&
+                         isValidId(messageId) &&
+                         isValidMessage(incoming()) &&
+                         incoming().senderId == existing().senderId &&
+                         incoming().text == existing().text &&
+                         incoming().createdAt == existing().createdAt &&
+                         incoming().diff(existing()).affectedKeys().hasOnly(['read']) &&
+                         incoming().read == true &&
+                         ((isAdmin() && existing().senderId == uid) ||
+                          (request.auth.uid == uid && existing().senderId != uid));
+
+        allow delete: if isAdmin() && isValidId(uid) && isValidId(messageId);
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 4. Reports (Comments & Messages): reports/{reportId}
+    // -------------------------------------------------------------------------
+    match /reports/{reportId} {
+      allow create: if isSignedIn() &&
+                       isValidId(reportId) &&
+                       !isBlocked() &&
+                       incoming().reporterUid == request.auth.uid &&
+                       isValidReport(incoming());
+      allow get, list, update, delete: if isAdmin();
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. Publisher Admin Registry & GitHub Config (Server role-backed)
+    // -------------------------------------------------------------------------
+    match /admins/{email} {
+      allow get: if isApprovedAdmin() || (
+        hasEmail() &&
+        request.auth.token.email.lower() == email.lower()
+      );
+      allow list: if isApprovedAdmin();
+      allow write: if isAdmin();
+    }
+
+    match /config/github {
+      allow read: if isApprovedAdmin();
+      allow write: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <files-path name="themehub_files" path="." />
+    <cache-path name="themehub_cache" path="." />
+    <external-files-path name="themehub_external" path="." />
+</paths>

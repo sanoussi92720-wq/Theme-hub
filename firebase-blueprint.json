@@ -1,0 +1,145 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Public community profile and server-enforced role/block status for Theme Hub users.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth UID" },
+        "displayName": { "type": "string", "description": "Display name (1-60 chars)" },
+        "photoURL": { "type": "string", "description": "Profile avatar URL (<=500 chars)" },
+        "bio": { "type": "string", "description": "User bio (<=150 chars)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Join timestamp via FieldValue.serverTimestamp()" },
+        "role": { "type": "string", "enum": ["user", "admin"], "description": "Server-controlled role" },
+        "blocked": { "type": "boolean", "description": "Server-controlled block flag" }
+      },
+      "required": ["uid", "displayName", "photoURL", "bio", "createdAt", "role", "blocked"]
+    },
+    "ThemeStats": {
+      "title": "ThemeStats",
+      "description": "Transaction-maintained aggregate rating stats for a theme.",
+      "type": "object",
+      "properties": {
+        "ratingSum": { "type": "number", "description": "Sum of all star ratings" },
+        "ratingCount": { "type": "integer", "description": "Total number of ratings" },
+        "ratingAvg": { "type": "number", "description": "Average rating (0.0 - 5.0)" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last update timestamp" }
+      },
+      "required": ["ratingSum", "ratingCount", "ratingAvg", "updatedAt"]
+    },
+    "ThemeRating": {
+      "title": "ThemeRating",
+      "description": "Single user's 1-5 star rating for a theme.",
+      "type": "object",
+      "properties": {
+        "stars": { "type": "integer", "description": "Star rating from 1 to 5" },
+        "updatedAt": { "type": "string", "format": "date-time", "description": "Last rating update timestamp" }
+      },
+      "required": ["stars", "updatedAt"]
+    },
+    "ThemeComment": {
+      "title": "ThemeComment",
+      "description": "User comment on a theme (max 500 chars).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Author UID" },
+        "name": { "type": "string", "description": "Author display name" },
+        "photo": { "type": "string", "description": "Author avatar URL" },
+        "text": { "type": "string", "description": "Comment body (1-500 chars)" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Comment creation timestamp" },
+        "likes": { "type": "integer", "description": "Like counter" }
+      },
+      "required": ["uid", "name", "photo", "text", "createdAt", "likes"]
+    },
+    "CommentLike": {
+      "title": "CommentLike",
+      "description": "Per-user like marker on a comment.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Liker UID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp" }
+      },
+      "required": ["uid", "createdAt"]
+    },
+    "Conversation": {
+      "title": "Conversation",
+      "description": "Private 1:1 support/community conversation between user {uid} and Admin.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Conversation owner user UID" },
+        "userName": { "type": "string", "description": "User display name" },
+        "userPhoto": { "type": "string", "description": "User avatar URL" },
+        "lastMessage": { "type": "string", "description": "Last message snippet" },
+        "lastMessageAt": { "type": "string", "format": "date-time", "description": "Last message timestamp" },
+        "lastUserMessageAt": { "type": "string", "format": "date-time", "description": "Last regular-user message timestamp for 2s rate-limit" },
+        "lastSenderId": { "type": "string", "description": "Sender UID of last message" },
+        "unreadByAdmin": { "type": "integer", "description": "Unread count for admin" },
+        "unreadByUser": { "type": "integer", "description": "Unread count for user" }
+      },
+      "required": ["uid", "userName", "userPhoto", "lastMessage", "lastMessageAt", "lastSenderId", "unreadByAdmin", "unreadByUser"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Message inside conversations/{uid}/messages (max 1000 chars).",
+      "type": "object",
+      "properties": {
+        "text": { "type": "string", "description": "Message text (1-1000 chars)" },
+        "senderId": { "type": "string", "description": "Sender UID" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Timestamp via FieldValue.serverTimestamp()" },
+        "read": { "type": "boolean", "description": "Read status" }
+      },
+      "required": ["text", "senderId", "createdAt", "read"]
+    },
+    "AbuseReport": {
+      "title": "AbuseReport",
+      "description": "Moderation report filed against a comment or private message.",
+      "type": "object",
+      "properties": {
+        "targetType": { "type": "string", "enum": ["comment", "message"] },
+        "targetId": { "type": "string" },
+        "themeId": { "type": "string" },
+        "conversationUid": { "type": "string" },
+        "reporterUid": { "type": "string" },
+        "reportedUid": { "type": "string" },
+        "reason": { "type": "string" },
+        "textSnippet": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["targetType", "targetId", "reporterUid", "reportedUid", "reason", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profiles, server-controlled roles, and block flags."
+    },
+    "/themes/{themeId}": {
+      "schema": { "$ref": "#/entities/ThemeStats" },
+      "description": "Aggregate theme rating summary updated atomically via transactions."
+    },
+    "/themes/{themeId}/ratings/{uid}": {
+      "schema": { "$ref": "#/entities/ThemeRating" },
+      "description": "Per-user star rating for a theme."
+    },
+    "/themes/{themeId}/comments/{commentId}": {
+      "schema": { "$ref": "#/entities/ThemeComment" },
+      "description": "Paginated comments per theme."
+    },
+    "/themes/{themeId}/comments/{commentId}/likes/{uid}": {
+      "schema": { "$ref": "#/entities/CommentLike" },
+      "description": "Per-user comment like markers."
+    },
+    "/conversations/{uid}": {
+      "schema": { "$ref": "#/entities/Conversation" },
+      "description": "Private conversation summary between user {uid} and admin."
+    },
+    "/conversations/{uid}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Private messages in a user-admin conversation."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/AbuseReport" },
+      "description": "Reports on comments and messages."
+    }
+  }
+}

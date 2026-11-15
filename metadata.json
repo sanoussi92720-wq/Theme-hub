@@ -1,0 +1,8 @@
+{
+  "name": "Remix Theme Hub",
+  "description": "متجر ثيمات وتخصيص احترافي لجميع هواتف أندرويد (Honor, Huawei, Xiaomi, Samsung) مع دعم ملفات HWT وMTZ",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
